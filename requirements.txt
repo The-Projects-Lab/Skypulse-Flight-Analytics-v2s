@@ -1,0 +1,29 @@
+# Core Spark / Lakehouse
+pyspark==4.0.1
+delta-spark
+
+# Data handling
+pandas
+numpy
+pyarrow
+openpyxl
+
+# Kafka producer client
+kafka-python
+
+# External flight data integrations
+fast-flights
+requests
+python-dotenv
+
+# Dashboard
+streamlit
+streamlit-autorefresh
+
+# Orchestration
+# For production installs, prefer Airflow's official constraints file for
+# your Python version.
+apache-airflow
+
+# Local interview PDF generation helper
+reportlab
