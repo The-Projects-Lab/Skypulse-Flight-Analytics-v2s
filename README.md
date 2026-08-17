@@ -1119,10 +1119,6 @@ Recommended next steps:
 
 ---
 
-## Interview Positioning
-
-Best honest description:
-
 ```text
 SkyPulse is a local lakehouse-style aviation analytics project. It demonstrates
 batch ETL, Kafka ingestion, finite Spark Structured Streaming, Delta Medallion
@@ -1131,14 +1127,3 @@ live pipeline, and Streamlit visualization. It is not production-grade yet, and
 I can clearly explain what would need to change for production.
 ```
 
-Do not claim:
-
-- Docker deployment.
-- Kubernetes deployment.
-- Cloud deployment from this repo.
-- MLflow tracking.
-- scikit-learn modeling.
-- Continuous always-on streaming.
-- Exactly-once end-to-end guarantees.
-- Advanced Delta features such as MERGE, OPTIMIZE, ZORDER, CDF, or Delta Live
-  Tables.
