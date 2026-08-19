@@ -1,6 +1,7 @@
 import os
 import sys
 import glob
+import re
 import requests
 import pandas as pd
 import streamlit as st
@@ -18,12 +19,6 @@ st.set_page_config(
     page_icon="✈️",
     layout="wide",
     initial_sidebar_state="expanded"
-)
-
-# Automatically refresh every 10 seconds
-st_autorefresh(
-    interval=10000,
-    key="skypulse_live_refresh"
 )
 
 # ============================================================
@@ -334,10 +329,15 @@ def clean_time(value):
     if value is None:
         return "00:00"
 
-    value = str(value)
+    value = str(value).strip()
 
-    if " " in value:
-        value = value.split(" ")[0]
+    time_matches = re.findall(
+        r"\b\d{1,2}:\d{2}\b",
+        value
+    )
+
+    if time_matches:
+        return time_matches[-1]
 
     return value
 
@@ -401,6 +401,93 @@ def parse_duration_minutes(duration):
 
 
 # ============================================================
+# HELPER - SERPAPI PRICE
+# ============================================================
+
+def parse_live_price(value):
+
+    if value is None:
+        return None
+
+    if isinstance(value, (int, float)):
+        if value > 0:
+            return float(value)
+
+        return None
+
+    value = str(value)
+
+    digits = re.sub(
+        r"[^0-9.]",
+        "",
+        value
+    )
+
+    if not digits:
+        return None
+
+    try:
+        price = float(digits)
+
+    except ValueError:
+        return None
+
+    if price <= 0:
+        return None
+
+    return price
+
+
+def extract_flight_group_price(flight_group):
+
+    for key in [
+        "price",
+        "extracted_price",
+        "total_price"
+    ]:
+
+        price = parse_live_price(
+            flight_group.get(key)
+        )
+
+        if price is not None:
+            return price
+
+    return None
+
+
+def extract_duration_minutes(flight_group, flight_list):
+
+    duration = flight_group.get(
+        "total_duration"
+    )
+
+    if isinstance(duration, str):
+        return parse_duration_minutes(duration)
+
+    if duration:
+        return int(duration)
+
+    leg_minutes = []
+
+    for flight in flight_list:
+
+        leg_duration = flight.get("duration")
+
+        if isinstance(leg_duration, str):
+            leg_duration = parse_duration_minutes(
+                leg_duration
+            )
+
+        if leg_duration:
+            leg_minutes.append(
+                int(leg_duration)
+            )
+
+    return sum(leg_minutes)
+
+
+# ============================================================
 # SERPAPI GOOGLE FLIGHTS
 # ============================================================
 
@@ -448,6 +535,8 @@ def search_live_flights(
             timeout=60
         )
 
+        response.raise_for_status()
+
         data = response.json()
 
         if "error" in data:
@@ -473,7 +562,9 @@ def search_live_flights(
 
         for flight_group in all_flights:
 
-            price = flight_group.get("price")
+            price = extract_flight_group_price(
+                flight_group
+            )
 
             flight_list = flight_group.get(
                 "flights",
@@ -484,6 +575,7 @@ def search_live_flights(
                 continue
 
             first_flight = flight_list[0]
+            last_flight = flight_list[-1]
 
             airline = first_flight.get(
                 "airline",
@@ -496,7 +588,7 @@ def search_live_flights(
             )
 
             arrival_airport = (
-                first_flight
+                last_flight
                 .get("arrival_airport", {})
             )
 
@@ -514,22 +606,10 @@ def search_live_flights(
                 )
             )
 
-            duration = flight_group.get(
-                "total_duration",
-                0
+            duration_minutes = extract_duration_minutes(
+                flight_group,
+                flight_list
             )
-
-            if isinstance(duration, str):
-
-                duration_minutes = (
-                    parse_duration_minutes(duration)
-                )
-
-            else:
-
-                duration_minutes = int(
-                    duration or 0
-                )
 
             stops = max(
                 len(flight_list) - 1,
@@ -552,8 +632,16 @@ def search_live_flights(
 
         if not flights:
 
+            response_keys = ", ".join(
+                data.keys()
+            )
+
             return None, (
-                "No flights found for this search."
+                "No flights found for this search. "
+                f"SerpAPI sections: best_flights="
+                f"{len(best_flights)}, other_flights="
+                f"{len(other_flights)}. Response keys: "
+                f"{response_keys}"
             )
 
         return pd.DataFrame(flights), None
@@ -598,6 +686,19 @@ with st.sidebar:
 
     st.write(
         "Delta Lake • ML • SerpAPI"
+    )
+
+
+# Refresh only pages that display continuously changing
+# pipeline data. Search pages must not rerun mid-request.
+if page in [
+    "Dashboard",
+    "Live Pipeline"
+]:
+
+    st_autorefresh(
+        interval=10000,
+        key="skypulse_live_refresh"
     )
 
 
@@ -919,9 +1020,28 @@ elif page == "Live vs Predicted":
 
             if comparison_df.empty:
 
-                st.error(
-                    "Live flights were found but the "
-                    "ML model could not generate predictions."
+                if live_df["live_price"].dropna().empty:
+
+                    st.error(
+                        "SerpAPI returned flight itineraries, "
+                        "but no usable fares were found for "
+                        "comparison."
+                    )
+
+                else:
+
+                    st.error(
+                        "Live flights were found but the "
+                        "ML model could not generate predictions."
+                    )
+
+                st.subheader(
+                    "Live Search Results"
+                )
+
+                st.dataframe(
+                    live_df,
+                    use_container_width=True
                 )
 
             else:
