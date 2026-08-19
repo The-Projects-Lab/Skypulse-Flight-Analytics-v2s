@@ -1,6 +1,6 @@
 # Core Spark / Lakehouse
-pyspark==4.0.1
-delta-spark
+pyspark==4.1.1
+delta-spark==4.3.1
 
 # Data handling
 pandas
