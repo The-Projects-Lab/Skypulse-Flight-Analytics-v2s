@@ -150,7 +150,8 @@ def get_spark():
         from src.utils.spark_session import create_spark_session
 
         spark = create_spark_session(
-            "SkyPulse-Streamlit"
+            "SkyPulse-Streamlit",
+            enable_delta=False
         )
 
         return spark
@@ -198,20 +199,28 @@ def load_historical_data():
 @st.cache_data(ttl=10)
 def load_delta_data(path):
 
-    spark = get_spark()
-
-    if spark is None:
+    if not os.path.exists(path):
         return pd.DataFrame()
 
     try:
 
-        df = (
-            spark.read
-            .format("delta")
-            .load(path)
+        parquet_files = glob.glob(
+            os.path.join(
+                path,
+                "*.parquet"
+            )
         )
 
-        return df.toPandas()
+        if not parquet_files:
+            return pd.DataFrame()
+
+        return pd.concat(
+            [
+                pd.read_parquet(file)
+                for file in parquet_files
+            ],
+            ignore_index=True
+        )
 
     except Exception:
         return pd.DataFrame()
@@ -241,6 +250,10 @@ def load_model():
 
     except Exception as e:
 
+        st.error(
+            f"ML model could not be loaded: {e}"
+        )
+
         return None
 
 
@@ -263,7 +276,25 @@ def predict_price(
     spark = get_spark()
     model = load_model()
 
-    if spark is None or model is None:
+    if spark is None:
+
+        st.session_state[
+            "prediction_error"
+        ] = "Spark session is not available."
+
+        return None
+
+    if model is None:
+
+        st.session_state[
+            "prediction_error"
+        ] = (
+            "ML model is not available. Check that "
+            "models/flight_price_model is included in "
+            "the deployed repository and can be loaded "
+            "by PySpark."
+        )
+
         return None
 
     try:
@@ -313,9 +344,9 @@ def predict_price(
 
     except Exception as e:
 
-        st.error(
-            f"Prediction failed: {e}"
-        )
+        st.session_state[
+            "prediction_error"
+        ] = str(e)
 
         return None
 
@@ -1034,6 +1065,17 @@ elif page == "Live vs Predicted":
                         "Live flights were found but the "
                         "ML model could not generate predictions."
                     )
+
+                    prediction_error = st.session_state.get(
+                        "prediction_error"
+                    )
+
+                    if prediction_error:
+
+                        st.info(
+                            f"Prediction detail: "
+                            f"{prediction_error}"
+                        )
 
                 st.subheader(
                     "Live Search Results"
