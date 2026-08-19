@@ -1,5 +1,7 @@
 # SkyPulse Aviation Analytics Platform
 
+live : https://skypulse-flights.streamlit.app/
+
 SkyPulse is a local aviation fare analytics project built for batch and live
 flight-price analysis. It demonstrates a lakehouse-style data engineering
 workflow using PySpark, Kafka, Spark Structured Streaming, Delta Lake, Spark SQL,
