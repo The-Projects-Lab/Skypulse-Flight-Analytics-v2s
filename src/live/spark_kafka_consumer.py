@@ -6,14 +6,24 @@ from pyspark.sql.types import (
     IntegerType,
     DoubleType
 )
+import pyspark
 
 from src.utils.spark_session import create_spark_session
 
 
 # SPARK SESSION
 
+KAFKA_PACKAGE = (
+    "org.apache.spark:"
+    "spark-sql-kafka-0-10_2.13:"
+    f"{pyspark.__version__}"
+)
+
 spark = create_spark_session(
-    app_name="SkyPulse-Live-Kafka-Consumer"
+    app_name="SkyPulse-Live-Kafka-Consumer",
+    extra_packages=[
+        KAFKA_PACKAGE
+    ]
 )
 
 

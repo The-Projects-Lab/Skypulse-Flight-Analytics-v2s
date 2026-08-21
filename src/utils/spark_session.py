@@ -18,7 +18,8 @@ os.environ.setdefault(
 
 def create_spark_session(
     app_name: str = "SkyPulse Aviation Analytics",
-    enable_delta: bool = True
+    enable_delta: bool = True,
+    extra_packages=None
 ):
     """
     Create a local SparkSession configured with Delta Lake.
@@ -67,10 +68,18 @@ def create_spark_session(
         )
 
         spark = configure_spark_with_delta_pip(
-            builder
+            builder,
+            extra_packages=extra_packages
         ).getOrCreate()
 
     else:
+
+        if extra_packages:
+
+            builder = builder.config(
+                "spark.jars.packages",
+                ",".join(extra_packages)
+            )
 
         spark = builder.getOrCreate()
 

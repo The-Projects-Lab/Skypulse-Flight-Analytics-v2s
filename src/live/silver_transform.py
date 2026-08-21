@@ -29,11 +29,6 @@ BRONZE_PATH = "data/bronze/live_flight_prices"
 
 SILVER_PATH = "data/silver/live_flight_prices"
 
-CHECKPOINT_PATH = (
-    "data/checkpoints/silver_live_flight_prices"
-)
-
-
 # ==================================================
 # INDIAN AIRLINE CONFIGURATION
 # ==================================================
@@ -59,11 +54,11 @@ INDIAN_AIRLINE_NAMES = [
 
 
 # ==================================================
-# READ BRONZE DELTA AS STREAM
+# READ BRONZE DELTA
 # ==================================================
 
 bronze_df = (
-    spark.readStream
+    spark.read
     .format("delta")
     .load(BRONZE_PATH)
 )
@@ -218,15 +213,6 @@ silver_df = (
     )
 
     # ----------------------------------------------
-    # Watermark
-    # Handles late-arriving streaming events
-    # ----------------------------------------------
-    .withWatermark(
-        "event_timestamp",
-        "1 hour"
-    )
-
-    # ----------------------------------------------
     # Deduplicate logical flight observations
     #
     # event_id is NOT used because every scrape
@@ -252,18 +238,15 @@ silver_df = (
 # WRITE SILVER DELTA
 # ==================================================
 
-query = (
-    silver_df.writeStream
+(
+    silver_df.write
     .format("delta")
-    .outputMode("append")
+    .mode("overwrite")
     .option(
-        "checkpointLocation",
-        CHECKPOINT_PATH
+        "overwriteSchema",
+        "true"
     )
-    .trigger(
-        availableNow=True
-    )
-    .start(SILVER_PATH)
+    .save(SILVER_PATH)
 )
 
 
@@ -272,25 +255,15 @@ query = (
 # ==================================================
 
 print("========================================")
-print("SkyPulse Silver Streaming Started")
+print("SkyPulse Silver Transformation Started")
 print("========================================")
 print("Source       :", BRONZE_PATH)
 print("Target       :", SILVER_PATH)
 print("Format       : Delta Lake")
 print("Airline Scope: Indian Airlines Only")
-print("Watermark    : 1 hour")
 print("Deduplication: Logical flight + price")
-print("Checkpoint   :", CHECKPOINT_PATH)
-print("Trigger      : Available Now")
+print("Mode         : Batch overwrite")
 print("========================================")
-
-
-# ==================================================
-# WAIT FOR FINITE JOB COMPLETION
-# ==================================================
-
-query.awaitTermination()
-
 
 print("========================================")
 print("SkyPulse Silver Transformation Completed")

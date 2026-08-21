@@ -24,24 +24,6 @@ GOLD_WINDOW_PATH = "data/gold/price_window_analytics"
 
 
 # ==================================================
-# CHECKPOINT
-# ==================================================
-
-GOLD_CHECKPOINT = "data/checkpoints/gold_analytics"
-
-
-# ==================================================
-# READ SILVER AS STREAM
-# ==================================================
-
-silver_stream = (
-    spark.readStream
-    .format("delta")
-    .load(SILVER_PATH)
-)
-
-
-# ==================================================
 # PROCESS GOLD
 # ==================================================
 
@@ -282,21 +264,13 @@ def process_gold(batch_df, batch_id):
 
 
 # ==================================================
-# START GOLD STREAM
+# READ SILVER DATA
 # ==================================================
 
-gold_query = (
-    silver_stream.writeStream
-    .foreachBatch(process_gold)
-    .outputMode("append")
-    .option(
-        "checkpointLocation",
-        GOLD_CHECKPOINT
-    )
-    .trigger(
-        availableNow=True
-    )
-    .start()
+silver_batch = (
+    spark.read
+    .format("delta")
+    .load(SILVER_PATH)
 )
 
 
@@ -326,14 +300,18 @@ print("----------------------------------------")
 
 print("Transformation : Spark SQL")
 print("Storage        : Delta Lake")
-print("Trigger        : AvailableNow")
-print("Mode           : Finite Airflow-compatible job")
+print("Mode           : Batch overwrite")
 
 print("========================================\n")
 
 
 # ==================================================
-# WAIT UNTIL AVAILABLE DATA IS PROCESSED
+# RUN GOLD ANALYTICS
 # ==================================================
 
-gold_query.awaitTermination()
+process_gold(
+    silver_batch,
+    0
+)
+
+spark.stop()
