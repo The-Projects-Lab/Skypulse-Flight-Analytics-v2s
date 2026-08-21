@@ -138,6 +138,15 @@ python3 -m src.live.gold
 
 echo "[7/8] Committing and pushing latest live dashboard data..."
 
+# Local Python/Spark runs can touch tracked cache files.
+# Keep them out of live dashboard commits.
+git restore \
+    src/live/__pycache__ \
+    src/utils/__pycache__ \
+    2>/dev/null || true
+
+git pull --rebase --autostash origin main
+
 git add \
     run_pipeline.sh \
     src/live/kafka_producer.py \
@@ -155,8 +164,6 @@ if git diff --cached --quiet; then
 else
 
     git commit -m "Update live pipeline data $(date '+%Y-%m-%d %H:%M')"
-
-    git pull --rebase origin main
 
     git push origin main
 
