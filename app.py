@@ -1,6 +1,7 @@
 import os
 import sys
 import glob
+import json
 import re
 import requests
 import pandas as pd
@@ -204,11 +205,8 @@ def load_delta_data(path):
 
     try:
 
-        parquet_files = glob.glob(
-            os.path.join(
-                path,
-                "*.parquet"
-            )
+        parquet_files = get_active_delta_parquet_files(
+            path
         )
 
         if not parquet_files:
@@ -250,11 +248,258 @@ def load_model():
 
     except Exception as e:
 
-        st.error(
-            f"ML model could not be loaded: {e}"
-        )
+        st.session_state[
+            "model_load_error"
+        ] = str(e)
 
         return None
+
+
+# ============================================================
+# FALLBACK PRICE BASELINE
+# ============================================================
+
+@st.cache_data
+def load_baseline_data():
+
+    df = load_historical_data()
+
+    if df.empty:
+        return pd.DataFrame()
+
+    try:
+
+        baseline_df = df.rename(
+            columns={
+                "class": "cabin_class",
+                "duration": "duration_hours"
+            }
+        ).copy()
+
+        stops_map = {
+            "zero": 0,
+            "one": 1,
+            "two_or_more": 2
+        }
+
+        baseline_df["stops"] = (
+            baseline_df["stops"]
+            .map(stops_map)
+            .fillna(2)
+            .astype(int)
+        )
+
+        baseline_df["duration_minutes"] = (
+            pd.to_numeric(
+                baseline_df["duration_hours"],
+                errors="coerce"
+            ) * 60
+        )
+
+        baseline_df["days_left"] = pd.to_numeric(
+            baseline_df["days_left"],
+            errors="coerce"
+        )
+
+        baseline_df["price"] = pd.to_numeric(
+            baseline_df["price"],
+            errors="coerce"
+        )
+
+        for column in [
+            "airline",
+            "source_city",
+            "destination_city",
+            "cabin_class"
+        ]:
+
+            baseline_df[column] = (
+                baseline_df[column]
+                .astype(str)
+                .str.replace("_", " ", regex=False)
+                .str.strip()
+                .str.lower()
+            )
+
+        return baseline_df.dropna(
+            subset=[
+                "source_city",
+                "destination_city",
+                "cabin_class",
+                "duration_minutes",
+                "days_left",
+                "price"
+            ]
+        )
+
+    except Exception as e:
+
+        st.session_state[
+            "prediction_error"
+        ] = f"Baseline data could not be loaded: {e}"
+
+        return pd.DataFrame()
+
+
+def get_active_delta_parquet_files(path):
+
+    delta_log_path = os.path.join(
+        path,
+        "_delta_log"
+    )
+
+    log_files = sorted(
+        glob.glob(
+            os.path.join(
+                delta_log_path,
+                "*.json"
+            )
+        )
+    )
+
+    if not log_files:
+
+        return glob.glob(
+            os.path.join(
+                path,
+                "*.parquet"
+            )
+        )
+
+    active_files = set()
+
+    for log_file in log_files:
+
+        with open(log_file, "r") as file:
+
+            for line in file:
+
+                action = json.loads(line)
+
+                if "add" in action:
+
+                    active_files.add(
+                        action["add"]["path"]
+                    )
+
+                elif "remove" in action:
+
+                    active_files.discard(
+                        action["remove"]["path"]
+                    )
+
+    return [
+        os.path.join(
+            path,
+            file_path
+        )
+        for file_path in sorted(active_files)
+    ]
+
+
+def normalize_baseline_text(value):
+
+    return (
+        str(value)
+        .replace("_", " ")
+        .strip()
+        .lower()
+    )
+
+
+def predict_price_baseline(
+    airline,
+    source_city,
+    destination_city,
+    cabin_class,
+    duration_minutes,
+    stops,
+    days_left
+):
+
+    baseline_df = load_baseline_data()
+
+    if baseline_df.empty:
+        return None
+
+    airline = normalize_baseline_text(
+        airline
+    )
+
+    source_city = normalize_baseline_text(
+        source_city
+    )
+
+    destination_city = normalize_baseline_text(
+        destination_city
+    )
+
+    cabin_class = normalize_baseline_text(
+        cabin_class
+    )
+
+    stops = int(stops)
+    days_left = int(days_left)
+    duration_minutes = float(duration_minutes)
+
+    filter_steps = [
+        (
+            baseline_df["source_city"].eq(source_city) &
+            baseline_df["destination_city"].eq(destination_city) &
+            baseline_df["cabin_class"].eq(cabin_class) &
+            baseline_df["airline"].eq(airline) &
+            baseline_df["stops"].eq(stops)
+        ),
+        (
+            baseline_df["source_city"].eq(source_city) &
+            baseline_df["destination_city"].eq(destination_city) &
+            baseline_df["cabin_class"].eq(cabin_class) &
+            baseline_df["stops"].eq(stops)
+        ),
+        (
+            baseline_df["source_city"].eq(source_city) &
+            baseline_df["destination_city"].eq(destination_city) &
+            baseline_df["cabin_class"].eq(cabin_class)
+        ),
+        (
+            baseline_df["source_city"].eq(source_city) &
+            baseline_df["destination_city"].eq(destination_city)
+        ),
+        baseline_df["cabin_class"].eq(cabin_class),
+        pd.Series(
+            True,
+            index=baseline_df.index
+        )
+    ]
+
+    for mask in filter_steps:
+
+        candidates = baseline_df.loc[mask].copy()
+
+        if candidates.empty:
+            continue
+
+        candidates["distance"] = (
+            (candidates["days_left"] - days_left).abs() +
+            (
+                candidates["duration_minutes"] -
+                duration_minutes
+            ).abs() / 60
+        )
+
+        nearest = candidates.nsmallest(
+            min(
+                len(candidates),
+                200
+            ),
+            "distance"
+        )
+
+        return float(
+            nearest["price"].median()
+        )
+
+    return None
 
 
 # ============================================================
@@ -282,20 +527,56 @@ def predict_price(
             "prediction_error"
         ] = "Spark session is not available."
 
-        return None
+        st.session_state[
+            "prediction_mode"
+        ] = "Historical fare baseline"
+
+        return predict_price_baseline(
+            airline,
+            source_city,
+            destination_city,
+            cabin_class,
+            duration_minutes,
+            stops,
+            days_left
+        )
 
     if model is None:
 
         st.session_state[
             "prediction_error"
         ] = (
-            "ML model is not available. Check that "
-            "models/flight_price_model is included in "
-            "the deployed repository and can be loaded "
-            "by PySpark."
+            "Spark ML model is not available, so the "
+            "historical fare baseline was used."
         )
 
-        return None
+        model_load_error = st.session_state.get(
+            "model_load_error"
+        )
+
+        if model_load_error:
+
+            st.session_state[
+                "prediction_error"
+            ] = (
+                "Spark ML model could not be loaded "
+                f"({model_load_error}). Historical fare "
+                "baseline was used."
+            )
+
+        st.session_state[
+            "prediction_mode"
+        ] = "Historical fare baseline"
+
+        return predict_price_baseline(
+            airline,
+            source_city,
+            destination_city,
+            cabin_class,
+            duration_minutes,
+            stops,
+            days_left
+        )
 
     try:
 
@@ -340,6 +621,10 @@ def predict_price(
             .first()[0]
         )
 
+        st.session_state[
+            "prediction_mode"
+        ] = "Spark ML model"
+
         return float(prediction)
 
     except Exception as e:
@@ -348,7 +633,19 @@ def predict_price(
             "prediction_error"
         ] = str(e)
 
-        return None
+        st.session_state[
+            "prediction_mode"
+        ] = "Historical fare baseline"
+
+        return predict_price_baseline(
+            airline,
+            source_city,
+            destination_city,
+            cabin_class,
+            duration_minutes,
+            stops,
+            days_left
+        )
 
 
 # ============================================================
@@ -974,6 +1271,16 @@ elif page == "Live vs Predicted":
 
         else:
 
+            st.session_state.pop(
+                "prediction_error",
+                None
+            )
+
+            st.session_state.pop(
+                "prediction_mode",
+                None
+            )
+
             days_left = (
                 travel_date - date.today()
             ).days
@@ -1091,6 +1398,19 @@ elif page == "Live vs Predicted":
                 comparison_df = comparison_df.sort_values(
                     "live_price"
                 )
+
+                prediction_mode = st.session_state.get(
+                    "prediction_mode",
+                    "Spark ML model"
+                )
+
+                if prediction_mode != "Spark ML model":
+
+                    st.info(
+                        "Predictions are using the historical "
+                        "fare baseline because the deployed "
+                        "Spark model could not be loaded."
+                    )
 
                 best = comparison_df.iloc[0]
 
