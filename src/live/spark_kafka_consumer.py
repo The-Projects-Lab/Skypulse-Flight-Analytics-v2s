@@ -1,4 +1,8 @@
-from pyspark.sql.functions import col, from_json
+import json
+import os
+
+import pyspark
+from pyspark.sql.functions import col, from_json, max as spark_max
 from pyspark.sql.types import (
     StructType,
     StructField,
@@ -6,18 +10,92 @@ from pyspark.sql.types import (
     IntegerType,
     DoubleType
 )
-import pyspark
 
 from src.utils.spark_session import create_spark_session
 
 
-# SPARK SESSION
+# ==================================================
+# CONFIGURATION
+# ==================================================
+
+TOPIC = "flight_prices_live"
+BRONZE_PATH = "data/bronze/live_flight_prices"
+OFFSET_STATE_FILE = "data/live_kafka_offsets.json"
 
 KAFKA_PACKAGE = (
     "org.apache.spark:"
     "spark-sql-kafka-0-10_2.13:"
     f"{pyspark.__version__}"
 )
+
+
+# ==================================================
+# OFFSET STATE
+# ==================================================
+
+def load_offsets():
+    """
+    Load the next Kafka offsets to consume.
+
+    On the first run, read all available messages from
+    the topic. Later runs continue from the saved offset.
+    """
+
+    if not os.path.exists(OFFSET_STATE_FILE):
+        return "earliest"
+
+    with open(OFFSET_STATE_FILE, "r") as file:
+        return json.dumps(json.load(file))
+
+
+def save_offsets(kafka_df):
+    """
+    Save exclusive next offsets after a successful Bronze write.
+    """
+
+    offset_rows = (
+        kafka_df
+        .groupBy(
+            "topic",
+            "partition"
+        )
+        .agg(
+            (spark_max(col("offset")) + 1).alias("next_offset")
+        )
+        .collect()
+    )
+
+    offsets = {}
+
+    for row in offset_rows:
+
+        topic_offsets = offsets.setdefault(
+            row["topic"],
+            {}
+        )
+
+        topic_offsets[str(row["partition"])] = int(
+            row["next_offset"]
+        )
+
+    os.makedirs(
+        os.path.dirname(OFFSET_STATE_FILE),
+        exist_ok=True
+    )
+
+    with open(OFFSET_STATE_FILE, "w") as file:
+        json.dump(
+            offsets,
+            file,
+            indent=4
+        )
+
+    return offsets
+
+
+# ==================================================
+# SPARK SESSION
+# ==================================================
 
 spark = create_spark_session(
     app_name="SkyPulse-Live-Kafka-Consumer",
@@ -27,8 +105,9 @@ spark = create_spark_session(
 )
 
 
+# ==================================================
 # KAFKA EVENT SCHEMA
-
+# ==================================================
 
 schema = StructType([
     StructField("event_id", StringType(), True),
@@ -49,10 +128,22 @@ schema = StructType([
 ])
 
 
-# READ STREAM FROM KAFKA
+# ==================================================
+# READ AVAILABLE KAFKA MESSAGES
+# ==================================================
+
+starting_offsets = load_offsets()
+
+print("\n========================================")
+print("SkyPulse Kafka Batch Consumer Started")
+print("========================================")
+print("Kafka Topic :", TOPIC)
+print("Bronze      :", BRONZE_PATH)
+print("Offsets     :", starting_offsets)
+print("========================================\n")
 
 kafka_df = (
-    spark.readStream
+    spark.read
     .format("kafka")
     .option(
         "kafka.bootstrap.servers",
@@ -60,78 +151,68 @@ kafka_df = (
     )
     .option(
         "subscribe",
-        "flight_prices_live"
+        TOPIC
     )
     .option(
         "startingOffsets",
-        "earliest"
+        starting_offsets
+    )
+    .option(
+        "endingOffsets",
+        "latest"
     )
     .load()
 )
 
+record_count = kafka_df.count()
 
+if record_count == 0:
 
-# CONVERT KAFKA VALUE TO JSON STRING
+    print("No new Kafka records found. Bronze unchanged.")
 
-json_df = kafka_df.select(
-    col("value")
-    .cast("string")
-    .alias("json_data")
-)
+    spark.stop()
 
+else:
 
+    # ==================================================
+    # PARSE JSON PAYLOAD
+    # ==================================================
 
-# PARSE JSON
-
-
-flight_df = (
-    json_df
-    .select(
-        from_json(
-            col("json_data"),
-            schema
-        ).alias("data")
+    flight_df = (
+        kafka_df
+        .select(
+            from_json(
+                col("value").cast("string"),
+                schema
+            ).alias("data")
+        )
+        .select("data.*")
     )
-    .select("data.*")
-)
 
 
-
-# PROCESS EACH MICRO-BATCH
-
-
-def process_batch(batch_df, batch_id):
-
-    record_count = batch_df.count()
-
-    if record_count == 0:
-        return
-
-
+    # ==================================================
     # WRITE TO BRONZE DELTA
+    # ==================================================
 
     (
-        batch_df.write
+        flight_df.write
         .format("delta")
         .mode("append")
-        .save(
-            "data/bronze/live_flight_prices"
-        )
+        .save(BRONZE_PATH)
     )
 
-
-    # SHOW STREAMING PROGRESS IN TERMINAL
+    saved_offsets = save_offsets(kafka_df)
 
     print("\n========================================")
-    print("KAFKA → SPARK STREAMING BATCH PROCESSED")
+    print("KAFKA -> BRONZE BATCH PROCESSED")
     print("========================================")
-    print(f"Batch ID         : {batch_id}")
-    print(f"Records Consumed : {record_count}")
+    print("Records Consumed :", record_count)
     print("Source           : Kafka")
     print("Target           : Bronze Delta")
+    print("Saved Offsets    :", saved_offsets)
     print("========================================\n")
 
-    batch_df.select(
+    flight_df.select(
         "event_id",
         "source_city",
         "destination_city",
@@ -144,42 +225,4 @@ def process_batch(batch_df, batch_id):
         truncate=False
     )
 
-
-
-# START STREAMING QUERY
-
-
-query = (
-    flight_df.writeStream
-    .foreachBatch(process_batch)
-    .outputMode("append")
-    .option(
-        "checkpointLocation",
-        "data/checkpoints/live_flight_prices"
-    )
-    .trigger(
-        availableNow=True
-    )
-    .start()
-)
-
-
-# STARTUP MESSAGE
-
-
-print("\n========================================")
-print("SkyPulse Live Streaming Started")
-print("========================================")
-print("Kafka Topic : flight_prices_live")
-print("Bronze      : data/bronze/live_flight_prices")
-print("Checkpoint  : data/checkpoints/live_flight_prices")
-print("Trigger     : Every 10 seconds")
-print("========================================")
-print("Waiting for Kafka events...")
-print("Press Ctrl+C to stop the consumer.\n")
-
-
-
-# KEEP STREAM RUNNING
-
-query.awaitTermination()
+    spark.stop()

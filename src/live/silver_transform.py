@@ -213,23 +213,14 @@ silver_df = (
     )
 
     # ----------------------------------------------
-    # Deduplicate logical flight observations
+    # Deduplicate Kafka replay duplicates only.
     #
-    # event_id is NOT used because every scrape
-    # creates a new event_id.
-    #
-    # Including price means a changed fare is kept
-    # as a meaningful price update.
+    # Repeated scrapes of the same travel date are
+    # meaningful because they show whether prices
+    # changed over time.
     # ----------------------------------------------
     .dropDuplicates([
-        "source_city",
-        "destination_city",
-        "travel_date",
-        "airline",
-        "departure_time",
-        "arrival_time",
-        "class",
-        "price"
+        "event_id"
     ])
 )
 
@@ -261,7 +252,7 @@ print("Source       :", BRONZE_PATH)
 print("Target       :", SILVER_PATH)
 print("Format       : Delta Lake")
 print("Airline Scope: Indian Airlines Only")
-print("Deduplication: Logical flight + price")
+print("Deduplication: Kafka event_id only")
 print("Mode         : Batch overwrite")
 print("========================================")
 

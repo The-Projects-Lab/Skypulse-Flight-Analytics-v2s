@@ -101,7 +101,7 @@ fi
 # Sends live flight events
 # ============================================================
 
-echo "[4/7] Running Kafka Producer..."
+echo "[4/8] Running Kafka Producer..."
 python3 -m src.live.kafka_producer
 
 
@@ -111,7 +111,7 @@ python3 -m src.live.kafka_producer
 # Kafka -> Bronze
 # ============================================================
 
-echo "[5/7] Running Spark Kafka Consumer..."
+echo "[5/8] Running Spark Kafka Consumer..."
 echo "Kafka -> Bronze Layer"
 python3 -m src.live.spark_kafka_consumer
 
@@ -121,21 +121,53 @@ python3 -m src.live.spark_kafka_consumer
 # 6. SILVER + GOLD TRANSFORMATIONS
 # ============================================================
 
-echo "[6/7] Running Silver Transformation..."
+echo "[6/8] Running Silver Transformation..."
 echo "Bronze -> Silver Delta Layer"
 python3 -m src.live.silver_transform
 
-echo "[6/7] Running Gold Analytics..."
+echo "[6/8] Running Gold Analytics..."
 echo "Silver -> Gold Delta Analytics"
 python3 -m src.live.gold
 
 
 
 # ============================================================
-# 7. STREAMLIT UI
+# 7. GITHUB UPDATE
+# Push latest dashboard data so Streamlit Cloud redeploys
 # ============================================================
 
-echo "[7/7] Starting Streamlit UI..."
+echo "[7/8] Committing and pushing latest live dashboard data..."
+
+git add \
+    run_pipeline.sh \
+    src/live/kafka_producer.py \
+    src/live/spark_kafka_consumer.py \
+    src/live/silver_transform.py \
+    data/silver/live_flight_prices \
+    data/gold/route_price_analytics \
+    data/gold/airline_price_analytics \
+    data/gold/price_window_analytics
+
+if git diff --cached --quiet; then
+
+    echo "No Git changes to commit."
+
+else
+
+    git commit -m "Update live pipeline data $(date '+%Y-%m-%d %H:%M')"
+
+    git pull --rebase origin main
+
+    git push origin main
+
+fi
+
+
+# ============================================================
+# 8. STREAMLIT UI
+# ============================================================
+
+echo "[8/8] Starting Streamlit UI..."
 
 streamlit run app.py
 

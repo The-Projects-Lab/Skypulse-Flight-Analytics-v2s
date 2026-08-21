@@ -60,7 +60,9 @@ def save_pipeline_state(state):
 
 state = load_pipeline_state()
 
-run_date = pd.Timestamp.today().strftime(
+today = pd.Timestamp.today().normalize()
+
+run_date = today.strftime(
     "%Y-%m-%d"
 )
 
@@ -70,10 +72,10 @@ if state.get("last_run_date") != run_date:
 
 else:
 
-    days_ahead = state.get(
+    days_ahead = int(state.get(
         "next_days_ahead",
         1
-    )
+    ))
 
 
 # ==================================================
@@ -81,7 +83,7 @@ else:
 # ==================================================
 
 travel_date = (
-    pd.Timestamp.today()
+    today
     + pd.Timedelta(days=days_ahead)
 ).strftime("%Y-%m-%d")
 
