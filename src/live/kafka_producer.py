@@ -18,14 +18,17 @@ STATE_FILE = "data/live_pipeline_state.json"
 
 def load_pipeline_state():
     """
-    Load the next days_ahead value.
+    Load producer state.
 
-    If this is the first run, start with Day +1.
+    If this is the first run for the current calendar day,
+    start with Day +1. Repeated runs on the same day advance
+    the horizon by one day.
     """
 
     if not os.path.exists(STATE_FILE):
 
         return {
+            "last_run_date": None,
             "next_days_ahead": 1
         }
 
@@ -57,7 +60,20 @@ def save_pipeline_state(state):
 
 state = load_pipeline_state()
 
-days_ahead = state["next_days_ahead"]
+run_date = pd.Timestamp.today().strftime(
+    "%Y-%m-%d"
+)
+
+if state.get("last_run_date") != run_date:
+
+    days_ahead = 1
+
+else:
+
+    days_ahead = state.get(
+        "next_days_ahead",
+        1
+    )
 
 
 # ==================================================
@@ -73,6 +89,7 @@ travel_date = (
 print("\n========================================")
 print("SkyPulse Live Flight Producer")
 print("========================================")
+print("Run Date    :", run_date)
 print("Days Ahead  :", days_ahead)
 print("Travel Date :", travel_date)
 print("========================================\n")
@@ -275,6 +292,8 @@ print("--------------------------------")
 # ADVANCE TO NEXT DAY
 # Always advance, even if some queries failed
 # ==================================================
+
+state["last_run_date"] = run_date
 
 state["next_days_ahead"] = days_ahead + 1
 
